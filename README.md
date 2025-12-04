@@ -178,7 +178,7 @@ Prêts pour :
 
 ---
 
-# 🧪 **Résultats Backtest (capital initial : 1000$, volume 0.01)**
+# 🧪 **Résultats Backtest (capital initial : 1000$, volume 0.01) du 01/12/2024 au 04/12/2025**
 
 ## ⭐ Backtest standard
 
