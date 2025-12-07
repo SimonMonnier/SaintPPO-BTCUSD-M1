@@ -34,7 +34,7 @@ Fonctionnalités :
 * Moteur de trading :
 
   * BUY1 / SELL1 / BUY1.8 / SELL1.8 / HOLD
-  * SL & TP dynamiques (ATR multipliers)
+  * SL dynamiques (ATR multipliers)
   * Break-even automatique
   * Trailing intelligent basé ATR
   * Action mask identique au training
