@@ -42,14 +42,14 @@ class LiveConfig:
     n_bars_h1: int = 20000
 
     # doit matcher le training (cfg.tp_shrink = 0.7)
-    tp_shrink: float = 0.7
+    tp_shrink: float = 0.7  # plus utilisé si pas de TP fixe
 
     # trading (mêmes valeurs que PPOConfig)
     position_size: float = 0.01
     leverage: float = 6.0
     fee_rate: float = 0.0004  # juste informatif ici
     atr_sl_mult: float = 1.2
-    atr_tp_mult: float = 2.4
+    atr_tp_mult: float = 2.4  # plus utilisé si pas de TP fixe
 
     spread_bps: float = 0.0
     slippage_bps: float = 0.0
@@ -148,6 +148,7 @@ def safe_normalize(X, stats, clip_sigma=5.0):
     # On clip tout à ±5σ → le modèle reste dans sa zone de confort
     z = np.clip(z, -clip_sigma, clip_sigma)
     return z
+
 # ============================================================
 # MODELE SAINTv2 — COPIÉ DU TRAINING
 # ============================================================
@@ -489,30 +490,29 @@ def compute_entry_atr(df_merged: pd.DataFrame) -> float:
 
 def compute_sl_tp(cfg: LiveConfig, entry_price: float, side: int, entry_atr: float):
     """
-    Même logique que dans l'env training : ATR SL/TP + tp_shrink.
+    VERSION SANS TP FIXE :
+      - on ne calcule qu'un SL initial basé sur l'ATR
+      - la sortie se fait via break-even + trailing uniquement
     """
     fallback = 0.0015 * entry_price
     eff_atr = max(entry_atr, fallback, 1e-8)
 
     sl_dist = cfg.atr_sl_mult * eff_atr
-    tp_dist = cfg.atr_tp_mult * eff_atr * cfg.tp_shrink
 
     if side == 1:
         sl = entry_price - sl_dist
-        tp = entry_price + tp_dist
     else:
         sl = entry_price + sl_dist
-        tp = entry_price - tp_dist
 
     sl = max(sl, 1e-8)
-    tp = max(tp, 1e-8)
+    tp = None  # aucun TP fixe
     return sl, tp
 
 
 def send_order(cfg: LiveConfig, side: int, risk_scale: float, df_merged_closed: pd.DataFrame):
     """
     Ouvre une position avec volume = position_size * risk_scale
-    et SL/TP basés sur ATR (comme dans le backtest).
+    et SL basé sur ATR (PAS DE TP FIXE).
     side : +1 (BUY) ou -1 (SELL)
     """
     symbol = cfg.symbol
@@ -531,7 +531,7 @@ def send_order(cfg: LiveConfig, side: int, risk_scale: float, df_merged_closed: 
     volume = cfg.position_size * (risk_scale if risk_scale > 0 else 1.0)
 
     entry_atr = compute_entry_atr(df_merged_closed)
-    sl, tp = compute_sl_tp(cfg, price, side, entry_atr)
+    sl, _ = compute_sl_tp(cfg, price, side, entry_atr)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -540,10 +540,10 @@ def send_order(cfg: LiveConfig, side: int, risk_scale: float, df_merged_closed: 
         "type": order_type,
         "price": price,
         "sl": sl,
-        "tp": tp,
+        "tp": 0.0,  # aucun TP → tout se fait au SL / trailing
         "deviation": 50,
         "magic": 424242,
-        "comment": "SAINTv2_Live_duel",
+        "comment": "SAINTv2_Live_duel_noTP",
         "type_filling": mt5.ORDER_FILLING_IOC,
         "type_time": mt5.ORDER_TIME_GTC,
     }
@@ -556,7 +556,7 @@ def send_order(cfg: LiveConfig, side: int, risk_scale: float, df_merged_closed: 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         print(f"Order_send échoué, retcode={result.retcode}")
     else:
-        print(f"Order exécuté : side={side}, volume={volume}, prix={price}, SL={sl}, TP={tp}")
+        print(f"Order exécuté : side={side}, volume={volume}, prix={price}, SL={sl}, TP=0.0 (aucun TP fixe)")
 
 
 def modify_sl_tp(position, new_sl: float | None = None, new_tp: float | None = None):
@@ -564,6 +564,9 @@ def modify_sl_tp(position, new_sl: float | None = None, new_tp: float | None = N
     Modifie SL/TP en respectant :
       - la distance minimale broker (trade_stops_level)
       - une marge de sécurité supplémentaire si nécessaire.
+
+    ⚠️ Variante 'no TP' :
+      - si new_tp est None, on force TP=0.0 (aucun TP, comme le backtest).
     """
     symbol = position.symbol
     info = mt5.symbol_info(symbol)
@@ -592,7 +595,12 @@ def modify_sl_tp(position, new_sl: float | None = None, new_tp: float | None = N
     current_tp = float(position.tp) if position.tp > 0 else 0.0
 
     desired_sl = current_sl if new_sl is None else float(new_sl)
-    desired_tp = current_tp if new_tp is None else float(new_tp)
+
+    # Ici : pas de TP → si new_tp est None, on force 0.0
+    if new_tp is None:
+        desired_tp = 0.0
+    else:
+        desired_tp = float(new_tp)
 
     if position.type == mt5.POSITION_TYPE_BUY:
         if desired_sl > 0:
@@ -645,13 +653,14 @@ def modify_sl_tp(position, new_sl: float | None = None, new_tp: float | None = N
         "sl": desired_sl,
         "tp": desired_tp,
         "magic": 424242,
-        "comment": "SAINTv2_update_sl_tp",
+        "comment": "SAINTv2_update_sl_tp_noTP",
         "type_time": mt5.ORDER_TIME_GTC,
     }
 
     print(
         f"Envoi TRADE_ACTION_SLTP : "
         f"ticket={position.ticket}, old_sl={current_sl:.2f}, new_sl={desired_sl:.2f}, "
+        f"old_tp={current_tp:.2f}, new_tp={desired_tp:.2f}, "
         f"bid={bid:.2f}, ask={ask:.2f}, "
         f"stops_level_pts={stops_level_points}, freeze_level_pts={freeze_level_points}"
     )
@@ -670,6 +679,7 @@ def modify_sl_tp(position, new_sl: float | None = None, new_tp: float | None = N
 def update_sl_be_trailing_live(cfg: LiveConfig, df_closed: pd.DataFrame, position):
     """
     Break-even + trailing, basé sur la dernière bougie FERMÉE.
+    Pas de TP : on ne touche que le SL, TP est forcé à 0 dans modify_sl_tp.
     """
     if len(df_closed) == 0:
         return
@@ -736,7 +746,8 @@ def update_sl_be_trailing_live(cfg: LiveConfig, df_closed: pd.DataFrame, positio
     if new_sl is not None:
         if abs(new_sl - current_sl) > 1e-5:
             print(f"Update SL ({reason}) : old={current_sl:.2f} → new={new_sl:.2f}")
-            modify_sl_tp(position, new_sl)
+            # new_tp=None → modify_sl_tp forcera TP=0.0
+            modify_sl_tp(position, new_sl, None)
 
 
 # ============================================================
@@ -836,7 +847,7 @@ def live_loop(cfg: LiveConfig):
             # EN POSITION → BREAK-EVEN + TRAILING STOP
             # ====================================================
             if pos != 0:
-                print("Déjà en position → gestion SL par break-even + trailing stop.")
+                print("Déjà en position → gestion SL par break-even + trailing stop (sans TP).")
 
                 positions = mt5.positions_get(symbol=cfg.symbol)
                 if positions is None or len(positions) == 0:
@@ -857,7 +868,7 @@ def live_loop(cfg: LiveConfig):
                 continue
 
             # ====================================================
-            # FLAT → DÉCISION D'ENTRÉE SELON cfg.side (logique backtest Option B)
+            # FLAT → DÉCISION D'ENTRÉE SELON cfg.side
             # ====================================================
             with torch.no_grad():
                 s = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
@@ -886,25 +897,17 @@ def live_loop(cfg: LiveConfig):
                         print("Logits SHORT :", logits_short_m.cpu().numpy().round(4))
                         print("Probas SHORT :", probs_short.cpu().numpy().round(4))
 
-                        # Probabilité max parmi les 4 actions d'ouverture (0..3)
                         max_p_long = probs_long[:4].max().item()
                         max_p_short = probs_short[:4].max().item()
 
-                        #if max_p_long >= 0.70 and max_p_short >= 0.70:
-                            #print(
-                                #f"[DUEL] Conflit LONG/SHORT (max_p_long={max_p_long:.3f}, "
-                                #f"max_p_short={max_p_short:.3f}) → HOLD forcé."
-                            #)
-                            #a = 4
-                        # SEUIL DE CONFIANCE MINIMUM : 0.70
-                        if max_p_long >= 0.70 and max_p_long > max_p_short:
+                        if max_p_long >= 0.78 and max_p_long > max_p_short:
                             idx_long = int(torch.argmax(probs_long[:4]).item())
                             print(f"[DUEL] Candidat LONG idx={idx_long}, max_p_long={max_p_long:.3f}")
                             if idx_long in (0, 2):
                                 a = idx_long
                             else:
                                 a = 4
-                        elif max_p_short >= 0.70:
+                        elif max_p_short >= 0.78:
                             idx_short = int(torch.argmax(probs_short[:4]).item())
                             print(f"[DUEL] Candidat SHORT idx={idx_short}, max_p_short={max_p_short:.3f}")
                             if idx_short in (1, 3):
@@ -912,7 +915,7 @@ def live_loop(cfg: LiveConfig):
                             else:
                                 a = 4
                         else:
-                            print("[DUEL] Aucun signal avec prob >= 0.70 → HOLD.")
+                            print("[DUEL] Aucun signal avec prob >= 0.75 → HOLD.")
                             a = 4
 
                 elif cfg.side == "long":
@@ -935,8 +938,7 @@ def live_loop(cfg: LiveConfig):
 
                         print(f"BEST LONG : action={a_long}, prob={p_long:.3f}")
 
-                        # Seuil 0.70 + rejet des HOLD
-                        if a_long == 4 or p_long < 0.70:
+                        if a_long == 4 or p_long < 0.75:
                             print("[LONG] Signal trop faible ou HOLD → HOLD.")
                             a = 4
                         else:
@@ -962,8 +964,7 @@ def live_loop(cfg: LiveConfig):
 
                         print(f"BEST SHORT : action={a_short}, prob={p_short:.3f}")
 
-                        # Seuil 0.70 + rejet des HOLD
-                        if a_short == 4 or p_short < 0.70:
+                        if a_short == 4 or p_short < 0.75:
                             print("[SHORT] Signal trop faible ou HOLD → HOLD.")
                             a = 4
                         else:
@@ -1022,4 +1023,3 @@ if __name__ == "__main__":
     # side="short" → uniquement SHORT
     cfg = LiveConfig(side="duel")
     live_loop(cfg)
-    
