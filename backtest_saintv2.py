@@ -41,15 +41,15 @@ class LiveConfig:
     n_bars_h1: int = 200_000
 
     # même params que l'env / live
-    tp_shrink: float = 0.7
+    tp_shrink: float = 0.7  # plus utilisé si pas de TP fixe
 
     # trading
-    initial_capital: float = 1000.0
+    initial_capital: float = 100.0
     position_size: float = 0.01
     leverage: float = 6.0
     fee_rate: float = 0.0004
     atr_sl_mult: float = 1.2
-    atr_tp_mult: float = 2.4
+    atr_tp_mult: float = 2.4  # plus utilisé si pas de TP fixe
 
     spread_bps: float = 0.0
     slippage_bps: float = 0.0
@@ -63,7 +63,7 @@ class LiveConfig:
     backtest_min_extra_points: int = 100
 
     # ======= Seuil de confiance minimal pour ouvrir un trade =======
-    min_confidence: float = 0.7
+    min_confidence: float = 0.78
 
     # device
     force_cpu: bool = False
@@ -77,7 +77,7 @@ class LiveConfig:
     # fréquence d'affichage de progression (en nombre de bougies M1)
     progress_interval_bars: int = 1440  # ~ 1 jour
 
-    date_from: datetime = datetime(2024, 10, 1)
+    date_from: datetime = datetime(2024, 12, 28)
     date_to: Optional[datetime] = None
 
 
@@ -89,7 +89,7 @@ class BTState:
     volume: float = 0.0
     entry_price: float = 0.0
     sl: float = 0.0
-    tp: float = 0.0
+    tp: float = 0.0  # laissé dans la structure mais inutilisé
     entry_index: int = -1
     last_risk_scale: float = 1.0
     trades_pnl: List[float] = field(default_factory=list)
@@ -436,7 +436,7 @@ def build_live_obs(
 
 
 # ============================================================
-# LOGIQUE SL/TP + BREAK-EVEN / TRAILING + ACTION MASK
+# LOGIQUE SL + BREAK-EVEN / TRAILING (PAS DE TP)
 # ============================================================
 
 def compute_entry_atr(df_closed: pd.DataFrame) -> float:
@@ -447,21 +447,23 @@ def compute_entry_atr(df_closed: pd.DataFrame) -> float:
 
 
 def compute_sl_tp(cfg: LiveConfig, entry_price: float, side: int, entry_atr: float):
+    """
+    Version sans TP fixe :
+      - on ne calcule qu'un SL initial basé sur l'ATR
+      - la sortie se fait uniquement via SL / break-even / trailing
+    """
     fallback = 0.0015 * entry_price
     eff_atr = max(entry_atr, fallback, 1e-8)
 
     sl_dist = cfg.atr_sl_mult * eff_atr
-    tp_dist = cfg.atr_tp_mult * eff_atr * cfg.tp_shrink
 
     if side == 1:
         sl = entry_price - sl_dist
-        tp = entry_price + tp_dist
     else:
         sl = entry_price + sl_dist
-        tp = entry_price - tp_dist
 
     sl = max(sl, 1e-8)
-    tp = max(tp, 1e-8)
+    tp = None  # plus de TP fixe
     return sl, tp
 
 
@@ -473,7 +475,7 @@ def update_sl_be_trailing_backtest(
 ):
     """
     Version backtest de update_sl_be_trailing_live :
-      - break-even + trailing
+      - break-even + trailing uniquement
       - clamp du SL pour respecter une distance mini vis-à-vis du prix courant
         (approximation du trade_stops_level broker).
     """
@@ -704,7 +706,7 @@ def run_backtest(cfg: LiveConfig):
             df_prev_closed = df.iloc[:i].reset_index(drop=True)
             update_sl_be_trailing_backtest(cfg, df_prev_closed, state, min_price_dist)
 
-        # 1) SL / TP sur la barre i
+        # 1) SL sur la barre i (PAS DE TP)
         if state.position != 0 and i > state.entry_index:
             high_bar = float(row["high"])
             low_bar = float(row["low"])
@@ -713,19 +715,15 @@ def run_backtest(cfg: LiveConfig):
             exit_reason = None
 
             if state.position == 1:
+                # LONG : sortie seulement sur SL (classique ou trailing)
                 if low_bar <= state.sl:
                     exit_price = state.sl
-                    exit_reason = "SL"
-                elif high_bar >= state.tp:
-                    exit_price = state.tp
-                    exit_reason = "TP"
+                    exit_reason = "SL/TRAIL"
             elif state.position == -1:
+                # SHORT : sortie seulement sur SL (classique ou trailing)
                 if high_bar >= state.sl:
                     exit_price = state.sl
-                    exit_reason = "SL"
-                elif low_bar <= state.tp:
-                    exit_price = state.tp
-                    exit_reason = "TP"
+                    exit_reason = "SL/TRAIL"
 
             if exit_price is not None:
                 pnl = (
@@ -904,7 +902,7 @@ def run_backtest(cfg: LiveConfig):
                 state.volume = volume
                 state.entry_price = entry_price
                 state.sl = sl
-                state.tp = tp
+                state.tp = 0.0  # on ignore tp
                 state.entry_index = i
                 state.last_risk_scale = risk_scale
 
@@ -944,7 +942,7 @@ def run_backtest(cfg: LiveConfig):
 
                 print(
                     f"[{time_str}] OUVERTURE {side_txt} @ {entry_price:.2f} | vol={volume:.4f} | "
-                    f"SL={sl:.2f} | TP={tp:.2f} | risk_scale={risk_scale:.2f}"
+                    f"SL={sl:.2f} | risk_scale={risk_scale:.2f}"
                 )
 
         # 5) Log de progression périodique
