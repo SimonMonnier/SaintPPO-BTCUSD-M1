@@ -44,7 +44,7 @@ class LiveConfig:
     tp_shrink: float = 0.7  # plus utilisé si pas de TP fixe
 
     # trading
-    initial_capital: float = 100.0
+    initial_capital: float = 275.0
     position_size: float = 0.01
     leverage: float = 6.0
     fee_rate: float = 0.0004
@@ -63,7 +63,7 @@ class LiveConfig:
     backtest_min_extra_points: int = 100
 
     # ======= Seuil de confiance minimal pour ouvrir un trade =======
-    min_confidence: float = 0.78
+    min_confidence: float = 0.7
 
     # device
     force_cpu: bool = False
@@ -77,7 +77,7 @@ class LiveConfig:
     # fréquence d'affichage de progression (en nombre de bougies M1)
     progress_interval_bars: int = 1440  # ~ 1 jour
 
-    date_from: datetime = datetime(2024, 12, 28)
+    date_from: datetime = datetime(2024, 10, 1)
     date_to: Optional[datetime] = None
 
 
@@ -982,7 +982,7 @@ def run_backtest(cfg: LiveConfig):
 if __name__ == "__main__":
     # Choisis "duel" / "long" / "short"
     cfg = LiveConfig(
-        side="duel",
+        side="long",
         n_bars_m1=200_000,
         n_bars_h1=50_000,
     )
