@@ -900,14 +900,14 @@ def live_loop(cfg: LiveConfig):
                         max_p_long = probs_long[:4].max().item()
                         max_p_short = probs_short[:4].max().item()
 
-                        if max_p_long >= 0.78 and max_p_long > max_p_short:
+                        if max_p_long >= 0.7 and max_p_long > max_p_short:
                             idx_long = int(torch.argmax(probs_long[:4]).item())
                             print(f"[DUEL] Candidat LONG idx={idx_long}, max_p_long={max_p_long:.3f}")
                             if idx_long in (0, 2):
                                 a = idx_long
                             else:
                                 a = 4
-                        elif max_p_short >= 0.78:
+                        elif max_p_short >= 0.7:
                             idx_short = int(torch.argmax(probs_short[:4]).item())
                             print(f"[DUEL] Candidat SHORT idx={idx_short}, max_p_short={max_p_short:.3f}")
                             if idx_short in (1, 3):
@@ -915,7 +915,7 @@ def live_loop(cfg: LiveConfig):
                             else:
                                 a = 4
                         else:
-                            print("[DUEL] Aucun signal avec prob >= 0.75 → HOLD.")
+                            print("[DUEL] Aucun signal avec prob >= 0.78 → HOLD.")
                             a = 4
 
                 elif cfg.side == "long":
@@ -938,7 +938,7 @@ def live_loop(cfg: LiveConfig):
 
                         print(f"BEST LONG : action={a_long}, prob={p_long:.3f}")
 
-                        if a_long == 4 or p_long < 0.75:
+                        if a_long == 4 or p_long < 0.7:
                             print("[LONG] Signal trop faible ou HOLD → HOLD.")
                             a = 4
                         else:
@@ -964,7 +964,7 @@ def live_loop(cfg: LiveConfig):
 
                         print(f"BEST SHORT : action={a_short}, prob={p_short:.3f}")
 
-                        if a_short == 4 or p_short < 0.75:
+                        if a_short == 4 or p_short < 0.7:
                             print("[SHORT] Signal trop faible ou HOLD → HOLD.")
                             a = 4
                         else:
@@ -1021,5 +1021,5 @@ if __name__ == "__main__":
     # side="duel"  → LONG vs SHORT
     # side="long"  → uniquement LONG
     # side="short" → uniquement SHORT
-    cfg = LiveConfig(side="duel")
+    cfg = LiveConfig(side="long")
     live_loop(cfg)
